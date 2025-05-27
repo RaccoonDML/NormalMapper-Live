@@ -34,7 +34,7 @@ def generate_shadow(
     height, width = normal_map.shape[:2]
     x_pos, y_pos, z_pos = light_position
 
-    background_mask = np.all(np.abs(normal_map - normal_map[0,0]) < 0.1, axis=2)
+    background_mask = np.all(np.abs(normal_map - np.array([1.0, 1.0, 1.0])) < 0.1, axis=2)
     print(f"Background mask covers {np.sum(background_mask)/(width*height)*100:.1f}% of image")
     
     ind = np.zeros((height, width, 3))
@@ -124,15 +124,37 @@ class ShadowGUI(QMainWindow):
         control_panel.setLayout(control_layout)
 
         # 图像显示
+        image_panel = QWidget()
+        image_layout = QVBoxLayout(image_panel)
+        
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # 创建图像容器
+        image_container = QWidget()
+        self.image_container_layout = QHBoxLayout(image_container)
+        self.image_container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 设置标签
         self.normal_label = QLabel()
+        self.normal_label.setMinimumSize(200, 200)
+        self.normal_label.setAlignment(Qt.AlignCenter)
         self.shadow_label = QLabel()
-        img_layout = QHBoxLayout()
-        img_layout.addWidget(self.normal_label)
-        img_layout.addWidget(self.shadow_label)
-
+        self.shadow_label.setMinimumSize(200, 200)
+        self.shadow_label.setAlignment(Qt.AlignCenter)
+        
+        self.image_container_layout.addWidget(self.normal_label)
+        self.image_container_layout.addWidget(self.shadow_label)
+        
+        scroll_area.setWidget(image_container)
+        image_layout.addWidget(scroll_area)
+        
         # 组合布局
         layout.addWidget(control_panel, 1)
-        layout.addLayout(img_layout, 2)
+        layout.addWidget(image_panel, 2)
 
         # 信号连接
         self.file_btn.clicked.connect(self.load_image)
@@ -184,7 +206,8 @@ class ShadowGUI(QMainWindow):
             rgb = cv2.cvtColor(self.normal_map, cv2.COLOR_BGR2RGB)
             h, w, _ = rgb.shape
             qimg = QImage(rgb.data, w, h, QImage.Format_RGB888)
-            self.normal_label.setPixmap(QPixmap.fromImage(qimg).scaled(400, 400, Qt.KeepAspectRatio))
+            self.normal_pixmap = QPixmap.fromImage(qimg)
+            self.update_image_display()
 
     def save_shadow(self):
         try:
@@ -228,7 +251,6 @@ class ShadowGUI(QMainWindow):
 
             # 生成阴影
             shadow_img = generate_shadow(self.normal_map, **params)
-            print(f"Generated shadow image mode: {shadow_img.mode}")
             
             # 保存当前的阴影图用于导出
             self.current_shadow = shadow_img
@@ -237,27 +259,49 @@ class ShadowGUI(QMainWindow):
             
             # 显示结果
             shadow_np = np.array(shadow_img)
-            
             qimg = QImage(shadow_np.data, shadow_np.shape[1], shadow_np.shape[0], 
                          QImage.Format_Grayscale8)
-            if qimg.isNull():
-                raise ValueError("Failed to create QImage")
+            self.shadow_pixmap = QPixmap.fromImage(qimg)
+            self.update_image_display()
             
-            pixmap = QPixmap.fromImage(qimg)
-            if pixmap.isNull():
-                raise ValueError("Failed to create QPixmap")
-            
-            scaled_pixmap = pixmap.scaled(400, 400, Qt.KeepAspectRatio)
-            if scaled_pixmap.isNull():
-                raise ValueError("Failed to scale pixmap")
-            
-            self.shadow_label.setPixmap(scaled_pixmap)
-            print("Successfully updated display")
         except Exception as e:
             import traceback
             print(f"Error in update_shadow: {str(e)}")
             print(traceback.format_exc())
             QMessageBox.warning(self, "警告", f"生成阴影时出错：{str(e)}")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_image_display()
+
+    def update_image_display(self):
+        if not hasattr(self, 'normal_map'):
+            return
+            
+        # 获取可用空间
+        container_width = self.image_container_layout.contentsRect().width() // 2
+        container_height = self.image_container_layout.contentsRect().height()
+        
+        if container_width <= 0 or container_height <= 0:
+            return
+            
+        # 更新法线图显示
+        if hasattr(self, 'normal_pixmap'):
+            scaled_normal = self.normal_pixmap.scaled(
+                container_width, container_height,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.normal_label.setPixmap(scaled_normal)
+            
+        # 更新阴影图显示
+        if hasattr(self, 'shadow_pixmap'):
+            scaled_shadow = self.shadow_pixmap.scaled(
+                container_width, container_height,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.shadow_label.setPixmap(scaled_shadow)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
