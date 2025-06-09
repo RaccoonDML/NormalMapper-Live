@@ -7,12 +7,12 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 
 
-
 def generate_shadow(
     normal_path,
     light_position=(1000, -1000, 1000),  
     threshold=0.3,
-    smoothing=0
+    smoothing=0,
+    ind=None,
 ):  
     
     if isinstance(normal_path, str):
@@ -37,12 +37,15 @@ def generate_shadow(
     background_mask = np.all(np.abs(normal_map - np.array([1.0, 1.0, 1.0])) < 0.1, axis=2)
     print(f"Background mask covers {np.sum(background_mask)/(width*height)*100:.1f}% of image")
     
-    ind = np.zeros((height, width, 3))
-    for j in range(height):
-        for i in range(width):
-            ind[j,i,0] = 0
-            ind[j,i,1] = j
-            ind[j,i,2] = i
+    if ind is None:
+        # 生成行、列索引网格
+        rows, cols = np.indices((height, width))
+        # 直接构建三维坐标网格
+        ind = np.stack([
+            np.zeros_like(rows),  # Z轴（初始为0）
+            rows,                 # Y轴（行号）
+            cols                  # X轴（列号）
+        ], axis=-1).astype(np.float32)
     
     if smoothing > 0:
         eps = 0.04
@@ -59,7 +62,7 @@ def generate_shadow(
         normal_map = (mean_a * I) + mean_b
 
     Z = ind[:,:,0] + z_pos
-    Y = ind[:,:,1] - y_pos
+    Y = ind[:,:,1] + y_pos
     X = ind[:,:,2] - x_pos
     SUM = np.sqrt(X**2 + Y**2 + Z**2)
     LD = np.zeros_like(ind)
@@ -70,10 +73,14 @@ def generate_shadow(
     dot = np.sum(normal_map * LD, axis=2)
     dot = np.clip(dot, 0, 1.0)
 
-    shadow_map = np.where(dot > threshold, 0, 255).astype(np.uint8)
+    if threshold > 0:
+        shadow_map = np.where(dot > threshold, 0, 255).astype(np.uint8)
+    else:
+        shadow_map = ((1-dot)*255).astype(np.uint8)
+
     shadow_map[background_mask] = 0  # 背景区域设为白色
     
-    result = Image.fromarray(shadow_map)
+    result = Image.fromarray(255-shadow_map)
     return result
 
 
@@ -83,6 +90,8 @@ class ShadowGUI(QMainWindow):
         super().__init__()
         self.initUI()
         self.normal_map = None
+        self.ind = None
+        self.xy_pos = None
 
     def initUI(self):
         # 主布局
@@ -105,15 +114,15 @@ class ShadowGUI(QMainWindow):
         control_layout.addRow(self.save_btn)
         
         # 光源位置
-        x_container, self.x_slider = self.create_slider(-2000, 2000, -1000)
-        y_container, self.y_slider = self.create_slider(-2000, 2000, 0)
+        x_container, self.x_slider = self.create_slider(-500, 1500, 500)
+        y_container, self.y_slider = self.create_slider(-1500, 500, -500)
         z_container, self.z_slider = self.create_slider(-2000, 2000, 1000)
         control_layout.addRow("X 位置:", x_container)
         control_layout.addRow("Y 位置:", y_container)
         control_layout.addRow("Z 位置:", z_container)
 
         # 阈值
-        threshold_container, self.threshold_slider = self.create_slider(0, 100, 50)
+        threshold_container, self.threshold_slider = self.create_slider(0, 10, 5)
         control_layout.addRow("阈值:", threshold_container)
 
         # 平滑
@@ -198,6 +207,15 @@ class ShadowGUI(QMainWindow):
                 self.file_label.setText(path.split("/")[-1])
                 self.show_normal_map()
                 self.update_shadow()
+
+                rows, cols = np.indices((self.normal_map.shape[0], self.normal_map.shape[1]))
+                # 直接构建三维坐标网格
+                self.ind = np.stack([
+                    np.zeros_like(rows),  # Z轴（初始为0）
+                    rows,                 # Y轴（行号）
+                    cols                  # X轴（列号）
+                ], axis=-1).astype(np.float32)
+
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"加载图像时出错：{str(e)}")
 
@@ -244,13 +262,13 @@ class ShadowGUI(QMainWindow):
                     self.y_slider.value(),
                     self.z_slider.value()
                 ),
-                'threshold': self.threshold_slider.value()/100,
+                'threshold': self.threshold_slider.value()/10,
                 'smoothing': self.smooth_slider.value()
             }
             print(f"\nProcessing with parameters: {params}")
 
             # 生成阴影
-            shadow_img = generate_shadow(self.normal_map, **params)
+            shadow_img = generate_shadow(self.normal_map, **params, ind=self.ind)
             
             # 保存当前的阴影图用于导出
             self.current_shadow = shadow_img
